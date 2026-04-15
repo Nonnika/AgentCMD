@@ -12,7 +12,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+
+	"github.com/Nonnika/agentcmd/agent"
 )
 
 // Default BaseURL for DeepSeek Model
@@ -47,17 +48,17 @@ func NewClient(cfg *Config) *Client {
 }
 
 // Create and Send a chat request
-func (c *Client) Chat(ctx context.Context, messages []Message) (string, string, error) {
+func (c *Client) Chat(ctx context.Context, messages []agent.Message) (string, agent.Tool, error) {
 	ReqMsg := BuildReqMsg(c.cfg, messages)
 
 	reqBody, err := json.Marshal(ReqMsg)
 	if err != nil {
-		return "", "", fmt.Errorf("marshal req msg to json: %w", err)
+		return "", agent.Tool{}, fmt.Errorf("marshal req msg to json: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.cfg.BaseURL+"/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
-		return "", "", fmt.Errorf("create http request: %w", err)
+		return "", agent.Tool{}, fmt.Errorf("create http request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
@@ -65,33 +66,25 @@ func (c *Client) Chat(ctx context.Context, messages []Message) (string, string, 
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return "", "", fmt.Errorf("send http request: %w", err)
+		return "", agent.Tool{}, fmt.Errorf("send http request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", "", fmt.Errorf("http status code not ok: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return "", agent.Tool{}, fmt.Errorf("http status code not ok: %d, body: %s", resp.StatusCode, string(body))
 	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", "", fmt.Errorf("read response body: %w", err)
+		return "", agent.Tool{}, fmt.Errorf("read response body: %w", err)
 	}
 
 	var respMsg RespMsg
 	if err := json.Unmarshal(body, &respMsg); err != nil {
-		return "", "", fmt.Errorf("unmarshal response body to resp msg: %w", err)
+		return "", agent.Tool{}, fmt.Errorf("unmarshal response body to resp msg: %w", err)
 	}
 
-	content := ""
-	if respMsg.Choices[0].Message.Content != nil {
-		content = *respMsg.Choices[0].Message.Content
-	}
-	var toolCalls strings.Builder
-	if respMsg.Choices[0].Message.ToolCalls != nil {
-		for _, tool := range respMsg.Choices[0].Message.ToolCalls {
-			toolCalls.WriteString(tool.Function.Name + " " + tool.Function.Arguments + "\n")
-		}
-	}
+	content, tool := ConvertRespMessageToAgent(&respMsg)
 
-	return content, toolCalls.String(), nil
+	return content, tool, nil
 }
